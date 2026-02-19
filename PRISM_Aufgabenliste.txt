@@ -1,0 +1,393 @@
+================================================================================
+  PRISM – Packed Representations via Interference-Safe Superposition Mapping
+  Aufgabenliste (vollständig korrigierte Version)
+================================================================================
+
+Ziel: 100.000 Codes in <=1024 Dimensionen mit >=99% Retrieval-Genauigkeit,
+      erweiterbar ohne Retraining.
+
+--------------------------------------------------------------------------------
+PHASE 0 – Festlegung der Codestruktur
+--------------------------------------------------------------------------------
+
+Aufgabe 0.1: Definiere die Komponenten und Wertebereiche
+---------------------------------------------------------
+Wähle 5 Komponenten mit folgenden Anzahlen möglicher Werte:
+
+  - Komponente A: 10 Werte (Kategorie 0–9)
+  - Komponente B: 10 Werte
+  - Komponente C: 20 Werte
+  - Komponente D:  5 Werte
+  - Komponente E: 10 Werte
+
+  --> Gesamt: 10 x 10 x 20 x 5 x 10 = 100.000 eindeutige Codes
+
+Jeder Code ist ein Tupel (a, b, c, d, e) mit:
+  a in {0,...,9}, b in {0,...,9}, c in {0,...,19}, d in {0,...,4}, e in {0,...,9}
+
+Pruefung:
+  [+] Jeder Code eindeutig aus seinen Komponenten rekonstruierbar.
+  [+] Keine doppelte Strukturdefinition.
+  [+] Anzahl möglicher Kombinationen = 100.000 (>= gefordert).
+
+
+--------------------------------------------------------------------------------
+PHASE 1 – Hochdimensionalen Raum aufbauen
+--------------------------------------------------------------------------------
+
+Aufgabe 1.1: Generiere Basisvektoren fuer jeden Komponentenwert
+---------------------------------------------------------------
+  - Wähle eine Dimension D (Startwert: 2048).
+  - Für jeden möglichen Wert jeder Komponente erzeuge einen normalisierten
+    Zufallsvektor der Länge D:
+      Einträge unabhängig ~ N(0,1), dann normiert auf L2 = 1.
+  - Bezeichnung: b_a(A) für Wert a von Komponente A, usw.
+
+Pruefung:
+  [+] Mittlere Kosinus-Ähnlichkeit zwischen Basisvektoren ~= 0 (< 0,05).
+  [+] Norm aller Basisvektoren = 1.
+  [+] Histogramm der Kosinus-Ähnlichkeiten symmetrisch um 0.
+
+
+Aufgabe 1.2: Erzeuge Code-Vektoren durch Superposition
+------------------------------------------------------
+  Für jeden Code (a,b,c,d,e) definiere:
+
+    v_code = b_a(A) + b_b(B) + b_c(C) + b_d(D) + b_e(E)
+
+  Normiere anschliessend auf L2 = 1.
+  WICHTIG: Epsilon (1e-8) hinzufuegen, um Division durch Null zu vermeiden.
+
+Pruefung:
+  [+] Kosinus-Ähnlichkeit zwischen identischen Codes = 1.
+  [+] Mittlere Kosinus-Ähnlichkeit zwischen verschiedenen Codes < 0,3.
+  [+] Keine auffälligen Cluster außerhalb komponentenbedingter Ähnlichkeiten.
+
+
+--------------------------------------------------------------------------------
+PHASE 2 – Interferenzanalyse (ohne Decoder)
+--------------------------------------------------------------------------------
+
+Aufgabe 2.1: Berechne paarweise Kosinus-Aehnlichkeiten
+------------------------------------------------------
+  - Wähle zufällig 10.000 Codes aus der Gesamtmenge.
+  - Berechne für jedes Paar (i,j) mit i != j die Kosinus-Ähnlichkeit.
+  - Tipp: Vektorisiert via X @ X.T (NumPy), obere Dreiecksmatrix extrahieren.
+  - Unterscheide:
+      - Verbundene Codes:   >= 1 gemeinsamer Komponentenwert
+      - Unverbundene Codes: kein gemeinsamer Komponentenwert
+
+Pruefung:
+  [+] Maximale Kosinus-Ähnlichkeit zwischen unverbundenen Codes < 0,4.
+  [+] Verteilung der Ähnlichkeiten entspricht erwarteter Geometrie.
+
+
+Aufgabe 2.2: Variation der Dimension D
+---------------------------------------
+  Wiederhole Aufgabe 1.1, 1.2 und 2.1 für:
+    D = 2048, 1024, 512, 256, 128
+
+  Dokumentiere pro D:
+    - Mittelwert und Maximum der Ähnlichkeiten (verbunden / unverbunden)
+    - Histogramm der Ähnlichkeiten
+
+Pruefung:
+  [+] Maximale Ähnlichkeit unverbundener Codes steigt kontrolliert mit fallendem D.
+  [+] Identifiziere ersten Anhaltspunkt für Kapazität
+      (kleinste D mit max. Ähnlichkeit < 0,5).
+
+
+--------------------------------------------------------------------------------
+PHASE 3 – Decoder-Netz trainieren und Retrieval testen
+--------------------------------------------------------------------------------
+
+Aufgabe 3.1: Definiere ein kleines MLP als Decoder
+--------------------------------------------------
+  Eingabe:    Code-Vektor v in R^D (normiert)
+  Architektur:
+    - Hidden Layer 1: 256 Neuronen, ReLU
+    - Hidden Layer 2: 128 Neuronen, ReLU
+    - Output:  5 separate Kopf-Netze (Softmax):
+        Kopf A: 10 Klassen
+        Kopf B: 10 Klassen
+        Kopf C: 20 Klassen
+        Kopf D:  5 Klassen
+        Kopf E: 10 Klassen
+  Verlust:    Summe der Kreuzentropien aller Köpfe
+  Optimierer: Adam, Lernrate 0,001
+
+
+Aufgabe 3.2: Trainings-, Validierungs- und Testdaten aufteilen
+--------------------------------------------------------------
+  Aufteilung: 70% Training / 10% Validierung / 20% Test (zufällig)
+
+  Sicherstellung der Wertabdeckung:
+    Nach der Aufteilung prüfen, ob jeder Wert jeder Komponente im Trainingsset
+    vorkommt. Falls nicht: Code manuell ins Trainingsset verschieben.
+
+  Die Testmenge enthält nur Kombinationen bereits gesehener Werte –
+  Generalisierung auf neue Kombinationen, nicht auf neue Werte.
+
+
+Aufgabe 3.3: Training
+---------------------
+  - Maximal 50 Epochen.
+  - Early Stopping basierend auf VALIDIERUNGSGENAUIGKEIT (nicht Testmenge!).
+  - Metriken:
+      - Gesamtgenauigkeit: Alle 5 Komponenten korrekt vorhergesagt
+      - Genauigkeit pro Komponente
+  - Wiederhole Training mit 3 verschiedenen Seeds.
+
+Pruefung:
+  [+] Gesamtgenauigkeit auf Testdaten >= 99% (für stabile Dimensionen).
+  [+] Ergebnisse über Seeds stabil (Varianz < 0,5%).
+
+
+Aufgabe 3.4: Retrieval-Genauigkeit in Abhaengigkeit von D
+---------------------------------------------------------
+  Für jedes D aus Phase 2:
+    1. Basisvektoren generieren (fester Startseed pro D für Reproduzierbarkeit).
+    2. Code-Vektoren für alle 100.000 Codes erzeugen.
+    3. Decoder trainieren (wie 3.1–3.3), Testgenauigkeit notieren.
+
+  Bestimme D_krit = kleinste Dimension, bei der Testgenauigkeit >= 99% ist.
+  (Für alle D >= D_krit bleibt die Genauigkeit >= 99%.)
+
+  !! KORREKTUR: D_krit ist die kleinste Dimension MIT ausreichender Genauigkeit,
+     nicht die Dimension, bei der sie darunter faellt. !!
+
+
+--------------------------------------------------------------------------------
+PHASE 4 – Robustheit gegen Rauschen
+--------------------------------------------------------------------------------
+
+Aufgabe 4.1: Rauschen hinzufuegen
+----------------------------------
+  Verwende das trainierte Modell für D = 1024.
+  Füge additives Gauss-Rauschen hinzu:
+
+    v_noisy = (v + eps) / ||v + eps||,   eps ~ N(0, sigma^2 * I)
+
+  Teste: sigma = 0.0, 0.05, 0.1, 0.2, 0.5
+
+Pruefung:
+  [+] Dokumentiere Gesamtgenauigkeit in Abhängigkeit von sigma.
+  [+] Bestimme maximales sigma mit Genauigkeit >= 98%.
+  [+] Überprüfe Korrelation zwischen Fehlerrate und Kosinus-Ähnlichkeit
+      zum Originalvektor.
+
+
+--------------------------------------------------------------------------------
+PHASE 5 – Kontrollierte Ueberlagerung manipulieren
+--------------------------------------------------------------------------------
+
+Aufgabe 5.1: Gewichtete Komponenten
+------------------------------------
+  Ändere die Code-Erzeugung:
+
+    v_code = w_A*b_a(A) + w_B*b_b(B) + w_C*b_c(C) + w_D*b_d(D) + w_E*b_e(E)
+
+  Beispielgewichte: w_A=2.0, w_B=1.5, w_C=1.0, w_D=0.5, w_E=0.2
+  Normiere auf Länge 1. Trainiere neuen Decoder (gleiche Architektur).
+
+  HINWEIS: Nach L2-Normierung zählt das relative Gewicht zur Gesamtnorm –
+  nicht die Rohgewichte allein. Erwartung quantitativ mit Vektoranteilen belegen.
+
+Pruefung:
+  [+] Höher gewichtete Komponenten werden besser rekonstruiert.
+  [+] Änderung der Interferenz (max. Ähnlichkeit unverbundener Codes) dokumentiert.
+
+
+Aufgabe 5.2: Sparsity erzwingen
+--------------------------------
+  Generiere sparse Basisvektoren:
+    - Für jede Dimension: mit Wahrscheinlichkeit p=0,05 einen Wert ~ N(0,1),
+      sonst 0.
+    - Vor Normierung: Norm prüfen. Falls Norm < 1e-6 -> Vektor verwerfen und
+      neu generieren.
+    - Normiere auf L2 = 1.
+
+  Wiederhole Phase 1–3 für D = 1024 mit sparsen Basisvektoren.
+
+Pruefung:
+  [+] Ist maximale Ähnlichkeit unverbundener Codes geringer als bei dichten?
+  [+] Ändert sich D_krit?
+
+
+--------------------------------------------------------------------------------
+PHASE 6 – Online-Erweiterbarkeit
+--------------------------------------------------------------------------------
+
+Aufgabe 6.1: Neue Codes (neue Kombinationen alter Werte)
+---------------------------------------------------------
+  Ausgangsbasis: Trainierter Decoder für D = 1024.
+
+  Erzeuge 1000 neue Codes aus vorhandenen Werten, die weder im Training noch
+  im Validierungs- oder Testset vorkamen (separat als Holdout halten!).
+
+  Berechne Code-Vektoren per Superposition (gleiche Basisvektoren).
+  Teste den Decoder ohne weiteres Training.
+
+Pruefung:
+  [+] Genauigkeit auf neuen Codes >= 98% (echte Generalisierung).
+
+
+Aufgabe 6.2: Neue Werte hinzufuegen (Vokabularerweiterung)
+----------------------------------------------------------
+  Füge jeder Komponente einen neuen Wert hinzu:
+    A: 11, B: 11, C: 21, D: 6, E: 11
+
+  Generiere neue Basisvektoren für diese Werte.
+  Erzeuge 1000 Codes mit mindestens einem neuen Wert.
+
+  Schritt 1 – Ohne Fine-Tuning:
+    Erwartete Genauigkeit nahe 0 (neue Basisvektoren unbekannt).
+
+  Schritt 2 – Fine-Tuning:
+    Lernrate 0,0001, 10 Epochen, gemischter Datensatz (alt + neu).
+
+Pruefung:
+  [+] Genauigkeit auf alten Codes nach Fine-Tuning >= 98% (kein Vergessen).
+  [+] Genauigkeit auf neuen Codes nach Fine-Tuning >= 95%.
+
+
+--------------------------------------------------------------------------------
+PHASE 7 – Funktionale Nutzung im Task-Netz
+--------------------------------------------------------------------------------
+
+Aufgabe 7.1: Kontinuierliche Regressionsaufgabe
+------------------------------------------------
+  Stetige Zielfunktion (keine mod-Funktion mit Sprüngen!):
+
+    y = (a + b + c + d + e) / 50   in [0, 1]
+
+  Trainiere ein kleines MLP:
+    - 2 Hidden-Layer à 64 Neuronen (ReLU)
+    - 1 Ausgabeneuron (linear)
+    - Verlust: MSE
+    - Split: 70/10/20 (konsistent mit Phase 3)
+
+Pruefung:
+  [+] Test-MSE <= 0,01 (RMSE <= 0,1) zeigt, dass der Code-Vektor die
+      Information trägt.
+
+
+Aufgabe 7.2: Kontinuitaetsanalyse
+----------------------------------
+  Wähle einen festen Code, variiere eine Komponente schrittweise
+  (z.B. a von 0 bis 9, b/c/d/e konstant).
+
+  Erwartung: Da die Zielfunktion stetig ist, ändert sich die Ausgabe
+  kontinuierlich – keine Sprünge.
+
+  Quantifiziere den Zusammenhang:
+    Kosinus-Distanz der Eingabe <-> absoluter Unterschied der Ausgabe
+
+Pruefung:
+  [+] Ausgabe ändert sich stetig und vorhersagbar.
+  [+] Korrelation zwischen Eingabe- und Ausgabeänderung deutlich > 0.
+
+
+--------------------------------------------------------------------------------
+PHASE 8 – Reproduzierbarkeit und statistische Absicherung
+--------------------------------------------------------------------------------
+
+Aufgabe 8.1: Seeds variieren
+-----------------------------
+  Wiederhole das gesamte Experiment (Phasen 1–7) mit 5 verschiedenen Seeds
+  (Basisvektorgenerierung, Trainingssplit, Modellinitialisierung).
+
+  Dokumentiere pro Seed:
+    - D_krit
+    - Testgenauigkeit bei D = 1024
+    - Kosinus-Ähnlichkeitsverteilungen
+    - Rauschrobustheit
+
+Pruefung:
+  [+] D_krit variiert über Seeds maximal um eine Dimensionsstufe
+      (z.B. 512 vs. 1024 – da D nur diskret in Stufen gemessen wird,
+       ist eine +-128-Toleranz nicht sinnvoll).
+  [+] Genauigkeit bei D = 1024 >= 99% in allen Läufen.
+  [+] Ähnlichkeitsverteilungen qualitativ gleich.
+
+
+--------------------------------------------------------------------------------
+PHASE 9 – Vergleich mit One-Hot-Kodierung
+--------------------------------------------------------------------------------
+
+Aufgabe 9.1: One-Hot-Baseline (faire Architektur)
+--------------------------------------------------
+  Kodiere jeden Code als One-Hot-Vektor der Länge 100.000.
+
+  WICHTIG: Sparse Matrizen verwenden! Eine dichte One-Hot-Matrix würde
+  100.000 x 100.000 x 4 Byte ~= 40 GB Speicher benötigen.
+
+  Decoder-Architektur One-Hot (zum fairen Vergleich kein Hidden-Layer):
+    - Linearer Klassifikator pro Kopf (100.000 -> Klassen)
+    - Gesamtparameter: 100.000 x 55 = 5,5 Millionen
+
+  Decoder-Architektur Superposition (D=1024):
+    - Wie Phase 3 (256/128 Hidden)
+    - Gesamtparameter: ca. 357.000
+
+
+Aufgabe 9.2: Vergleich dokumentieren
+--------------------------------------
+  Trainiere beide Modelle (gleiche Epochenzahl, gleicher Optimierer).
+  Messe und vergleiche:
+    - Trainingszeit pro Epoche
+    - Testgenauigkeit
+    - Anzahl Parameter
+
+Pruefung:
+  [+] Superposition benoetigt signifikant weniger Parameter (Faktor ~= 15).
+  [+] Trainingszeit pro Epoche deutlich geringer.
+  [+] Genauigkeit vergleichbar (>= 99%).
+
+
+--------------------------------------------------------------------------------
+ABSCHLUSSBEDINGUNG
+--------------------------------------------------------------------------------
+
+Das Projekt PRISM gilt als erfolgreich, wenn:
+
+  1. Bei D = 1024 die Retrieval-Genauigkeit (alle 5 Komponenten korrekt)
+     auf Testdaten >= 99% betraegt.
+
+  2. D_krit <= 1024 ist – d.h. bereits 1024 Dimensionen reichen aus,
+     um >= 99% zu erreichen.
+     (Falls D_krit = 512 oder weniger: Ziel übererfüllt.)
+
+  3. Neue Codes (ohne neue Werte) ohne Retraining mit >= 98% Genauigkeit
+     dekodiert werden können.
+
+  4. Die Kapazitaetsgrenze (Abhaengigkeit der Genauigkeit von D)
+     vollständig dokumentiert ist.
+
+
+--------------------------------------------------------------------------------
+HINWEISE ZUR UMSETZUNG
+--------------------------------------------------------------------------------
+
+Speichermanagement:
+  Bei D=2048 belegen alle 100.000 Code-Vektoren bis zu 819 MB RAM.
+  Empfehlung: Code-Vektoren on-the-fly im Training berechnen
+  (pro Batch Basisvektoren summieren).
+
+Numerische Stabilitaet:
+  - Bei Normierung immer Epsilon (1e-8) hinzufuegen.
+  - Sparse Basisvektoren: Norm vor Normierung pruefen.
+    Vektoren mit Norm < 1e-6 verwerfen und neu generieren.
+
+Paarweise Aehnlichkeiten (Phase 2):
+  Fuer 10.000 Codes fallen ~50 Mio. Paare an.
+  Mit vektorisierten Methoden machbar, benoetigt aber ~8 GB RAM (float32).
+  Alternative: Stichprobe von Paaren verwenden.
+
+One-Hot-Implementierung (Phase 9):
+  Unbedingt scipy.sparse oder aequivalente Struktur nutzen –
+  dichte Matrix nicht realisierbar (~40 GB).
+
+================================================================================
+  Stand: vollstaendig korrigierte Version – alle Logikfehler behoben
+================================================================================
