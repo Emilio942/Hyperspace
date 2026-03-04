@@ -501,8 +501,9 @@ class PRISMDecoder(nn.Module):
 
 class CodeDataset(Dataset):
     """Dataset das Code-Vektoren on-the-fly aus Basisvektoren berechnet."""
-    def __init__(self, codes, basis_np, component_weights=None):
+    def __init__(self, codes, basis_np, component_weights=None, regression=False):
         self.codes = np.array(codes)
+        self.regression = regression
         if component_weights is None:
             component_weights = DEFAULT_COMPONENT_WEIGHTS
         self.weights = component_weights
@@ -521,6 +522,11 @@ class CodeDataset(Dataset):
            + self.weights["D"] * self.basis["D"][c[3]]
            + self.weights["E"] * self.basis["E"][c[4]])
         v = v / (v.norm() + 1e-8)
+        
+        if self.regression:
+            target = torch.tensor(c.sum() / 50.0, dtype=torch.float32).unsqueeze(0)
+            return v, target
+            
         labels = torch.tensor(c, dtype=torch.long)
         return v, labels
 
@@ -649,6 +655,9 @@ def train_decoder(D, basis, train_codes, val_codes, test_codes,
             print(f"    Epoch {epoch:3d}: loss={train_loss:.4f}, "
                 f"val_acc={val_acc:.4f} [{comp_log}]")
 
+        # Timing
+        epoch_times.append(time.time() - epoch_start)
+
         # Early Stopping
         if val_acc > best_val_acc:
             best_val_acc = val_acc
@@ -661,7 +670,6 @@ def train_decoder(D, basis, train_codes, val_codes, test_codes,
                     print(f"    Early Stopping bei Epoch {epoch} "
                           f"(best val_acc={best_val_acc:.4f})")
                 break
-            epoch_times.append(time.time() - epoch_start)
 
     # Lade bestes Modell
     if best_model_state is None:
@@ -834,6 +842,7 @@ def run_phase3_4(dimensions=(2048, 1024, 512, 256, 128), basis_seed=42):
 # ============================================================================
 
 def evaluate_noisy_retrieval(model, basis, codes, sigma=0.0,
+                             component_weights=None,
                              batch_size=2048, seed=123, device=None):
     """
     Aufgabe 4.1: Evaluiert den Decoder auf verrauschten Code-Vektoren.
@@ -858,12 +867,9 @@ def evaluate_noisy_retrieval(model, basis, codes, sigma=0.0,
             end = min(start + batch_size, n)
             batch_codes = codes_arr[start:end]
 
-            v = (basis["A"][batch_codes[:, 0]]
-               + basis["B"][batch_codes[:, 1]]
-               + basis["C"][batch_codes[:, 2]]
-               + basis["D"][batch_codes[:, 3]]
-               + basis["E"][batch_codes[:, 4]])
-            v = v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-8)
+            # Nutze build_code_vectors für konsistente Vektor-Erstellung
+            v = build_code_vectors(batch_codes, basis, D=basis["A"].shape[1],
+                                   component_weights=component_weights)
 
             eps = rng.normal(loc=0.0, scale=sigma, size=v.shape)
             v_noisy = v + eps
@@ -1433,35 +1439,24 @@ def train_regressor(D, basis, train_codes, val_codes, test_codes,
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
 
-    x_train = build_code_vectors(train_codes, basis, D)
-    y_train = compute_targets(train_codes)
-    x_val = build_code_vectors(val_codes, basis, D)
-    y_val = compute_targets(val_codes)
-    x_test = build_code_vectors(test_codes, basis, D)
-    y_test = compute_targets(test_codes)
+    train_ds = CodeDataset(train_codes, basis, regression=True)
+    val_ds = CodeDataset(val_codes, basis, regression=True)
+    test_ds = CodeDataset(test_codes, basis, regression=True)
 
-    train_x = torch.tensor(x_train, dtype=torch.float32, device=device)
-    train_y = torch.tensor(y_train, dtype=torch.float32, device=device).unsqueeze(1)
-    val_x = torch.tensor(x_val, dtype=torch.float32, device=device)
-    val_y = torch.tensor(y_val, dtype=torch.float32, device=device).unsqueeze(1)
-    test_x = torch.tensor(x_test, dtype=torch.float32, device=device)
-    test_y = torch.tensor(y_test, dtype=torch.float32, device=device).unsqueeze(1)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
     best_val_mse = float("inf")
     best_state = None
     patience = 7
     patience_counter = 0
 
-    n = train_x.size(0)
     for epoch in range(1, max_epochs + 1):
         model.train()
-        perm = torch.randperm(n, device=device)
         epoch_loss = 0.0
-
-        for start in range(0, n, batch_size):
-            idx = perm[start:start + batch_size]
-            xb = train_x[idx]
-            yb = train_y[idx]
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
             pred = model(xb)
             loss = criterion(pred, yb)
             optimizer.zero_grad()
@@ -1469,12 +1464,16 @@ def train_regressor(D, basis, train_codes, val_codes, test_codes,
             optimizer.step()
             epoch_loss += loss.item() * xb.size(0)
 
-        train_mse = epoch_loss / n
+        train_mse = epoch_loss / len(train_ds)
 
         model.eval()
+        val_loss = 0.0
         with torch.no_grad():
-            val_pred = model(val_x)
-            val_mse = criterion(val_pred, val_y).item()
+            for xb, yb in val_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                pred = model(xb)
+                val_loss += criterion(pred, yb).item() * xb.size(0)
+        val_mse = val_loss / len(val_ds)
 
         if epoch <= 5 or epoch % 5 == 0:
             print(f"    Epoch {epoch:3d}: train_mse={train_mse:.6f}, val_mse={val_mse:.6f}")
@@ -1491,10 +1490,14 @@ def train_regressor(D, basis, train_codes, val_codes, test_codes,
 
     model.load_state_dict(best_state)
     model.eval()
+    test_loss = 0.0
     with torch.no_grad():
-        test_pred = model(test_x)
-        test_mse = criterion(test_pred, test_y).item()
-        test_rmse = float(np.sqrt(test_mse))
+        for xb, yb in test_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            pred = model(xb)
+            test_loss += criterion(pred, yb).item() * xb.size(0)
+    test_mse = test_loss / len(test_ds)
+    test_rmse = float(np.sqrt(test_mse))
 
     return model, test_mse, test_rmse
 
@@ -1874,12 +1877,14 @@ def run_phase9(D=1024, seed=42, max_epochs=30):
     print("=" * 60)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # Fairer Architekturvergleich: jede Code-ID ist in Train/Val/Test enthalten
-    # (lineare One-Hot-Baseline kann sonst auf ungesehene IDs nicht generalisieren).
+    
+    # Nutze echten Split (70/10/20) wie in anderen Phasen.
+    # Hinweis: Die One-Hot-Baseline wird auf Test-Daten (ungesehene IDs) 
+    # naturgemäß 0% erreichen, was die Generalisierungsfähigkeit der 
+    # Superposition gegenüber One-Hot unterstreicht.
+    train_codes, val_codes, test_codes = split_data(ALL_CODES, seed=seed)
+    
     code_to_id = {code: idx for idx, code in enumerate(ALL_CODES)}
-    train_codes = list(ALL_CODES)
-    val_codes = list(ALL_CODES)
-    test_codes = list(ALL_CODES)
     train_ids = [code_to_id[tuple(c)] for c in train_codes]
     val_ids = [code_to_id[tuple(c)] for c in val_codes]
     test_ids = [code_to_id[tuple(c)] for c in test_codes]
